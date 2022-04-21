@@ -10,7 +10,7 @@ from maro.utils import LoggerV2
 
 if __name__ == "__main__":
     scenario = Scenario(get_env("SCENARIO_PATH"))
-    policy_creator = scenario.policy_creator
+    get_policy_creator = scenario.get_policy_creator
 
     worker_idx = int_or_none(get_env("ID"))
     logger = LoggerV2(
@@ -22,7 +22,7 @@ if __name__ == "__main__":
     )
     worker = RolloutWorker(
         idx=worker_idx,
-        env_sampler_creator=partial(scenario.env_sampler_creator, policy_creator),
+        env_sampler_creator=partial(scenario.env_sampler_creator, get_policy_creator),
         producer_host=get_env("ROLLOUT_CONTROLLER_HOST"),
         producer_port=int_or_none(get_env("ROLLOUT_CONTROLLER_PORT")),
         logger=logger,
