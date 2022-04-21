@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List
 from maro.rl.policy import AbsPolicy
 from maro.rl.rollout import AbsEnvSampler
 from maro.rl.training import AbsTrainer
+from maro.simulator import Env
 
 
 class Scenario(object):
@@ -19,28 +20,28 @@ class Scenario(object):
         self._module = importlib.import_module(os.path.basename(path))
 
     @property
-    def env_sampler_creator(self) -> Callable[[Dict[str, Callable[[str], AbsPolicy]]], AbsEnvSampler]:
+    def env_sampler_creator(self) -> Callable[[Callable[[Env], Dict[str, Callable[[str], AbsPolicy]]]], AbsEnvSampler]:
         return getattr(self._module, "env_sampler_creator")
 
     @property
-    def agent2policy(self) -> Dict[Any, str]:
-        return getattr(self._module, "agent2policy")
+    def get_agent2policy(self) -> Callable[[Env], Dict[Any, str]]:
+        return getattr(self._module, "get_agent2policy")
 
     @property
-    def policy_creator(self) -> Dict[str, Callable[[str], AbsPolicy]]:
-        return getattr(self._module, "policy_creator")
+    def get_policy_creator(self) -> Callable[[Env], Dict[str, Callable[[str], AbsPolicy]]]:
+        return getattr(self._module, "get_policy_creator")
 
     @property
-    def trainable_policies(self) -> List[str]:
-        return getattr(self._module, "trainable_policies", None)
+    def get_trainable_policies(self) -> Callable[[Env], List[str]]:
+        return getattr(self._module, "get_trainable_policies", None)
 
     @property
-    def trainer_creator(self) -> Dict[str, Callable[[str], AbsTrainer]]:
-        return getattr(self._module, "trainer_creator")
+    def get_trainer_creator(self) -> Callable[[Env], Dict[str, Callable[[str], AbsTrainer]]]:
+        return getattr(self._module, "get_trainer_creator")
 
     @property
-    def device_mapping(self) -> Dict[str, str]:
-        return getattr(self._module, "device_mapping", {})
+    def get_device_mapping(self) -> Callable[[Env], Dict[str, str]]:
+        return getattr(self._module, "get_device_mapping", {})
 
     @property
     def post_collect(self) -> Callable[[list, int, int], None]:

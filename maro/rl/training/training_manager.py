@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Iterable, List, Tuple
 from maro.rl.policy import AbsPolicy
 from maro.rl.rollout import ExpElement
 from maro.rl.training import SingleAgentTrainer
+from maro.simulator import Env
 from maro.utils import LoggerV2
 from maro.utils.exception.rl_toolkit_exception import MissingTrainer
 
@@ -33,18 +34,24 @@ class TrainingManager(object):
 
     def __init__(
         self,
-        policy_creator: Dict[str, Callable[[str], AbsPolicy]],
-        trainer_creator: Dict[str, Callable[[str], AbsTrainer]],
-        agent2policy: Dict[Any, str],  # {agent_name: policy_name}
-        device_mapping: Dict[str, str] = None,
+        get_env: Callable[[], Env],
+        get_policy_creator: Callable[[Env], Dict[str, Callable[[str], AbsPolicy]]],
+        get_trainer_creator: Callable[[Env], Dict[str, Callable[[str], AbsTrainer]]],
+        get_agent2policy: Callable[[Env], Dict[Any, str]],
+        get_device_mapping: Callable[[Env], Dict[str, str]] = None,
         proxy_address: Tuple[str, int] = None,
         logger: LoggerV2 = None,
     ) -> None:
         super(TrainingManager, self).__init__()
 
+        self._env = get_env()
+
         self._trainer_dict: Dict[str, AbsTrainer] = {}
-        self._agent2policy = agent2policy
+        self._agent2policy = get_agent2policy(self._env)
         self._proxy_address = proxy_address
+
+        trainer_creator = get_trainer_creator(self._env)
+        policy_creator = get_policy_creator(self._env)
         for trainer_name, func in trainer_creator.items():
             trainer = func(trainer_name)
             if self._proxy_address:
@@ -56,6 +63,7 @@ class TrainingManager(object):
             self._trainer_dict[trainer_name] = trainer
 
         # User-defined allocation of compute devices, i.e., GPU's to the trainer ops
+        device_mapping = get_device_mapping(self._env)
         if device_mapping is not None:
             for policy_name, device_name in device_mapping.items():
                 trainer = self._trainer_dict[extract_trainer_name(policy_name)]

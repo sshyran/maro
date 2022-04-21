@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
-from maro.rl.policy import RLPolicy
+from maro.rl.policy import AbsPolicy, RLPolicy
 from maro.rl.rollout import AbsEnvSampler, CacheElement
 from maro.simulator import Env
 from maro.simulator.scenarios.cim.common import Action, ActionType, DecisionEvent
@@ -83,12 +83,13 @@ class CIMEnvSampler(AbsEnvSampler):
         self._post_step(cache_element, reward)
 
 
-agent2policy = {agent: f"{algorithm}_{agent}.policy" for agent in Env(**env_conf).agent_idx_list}
+def get_agent2policy(env: Env) -> Dict[Any, str]:
+    return {agent: f"{algorithm}_{agent}.policy" for agent in env.agent_idx_list}
 
 
-def env_sampler_creator(policy_creator: Dict[str, Callable[[str], RLPolicy]]) -> CIMEnvSampler:
+def env_sampler_creator(get_policy_creator: Callable[[Env], Dict[str, Callable[[str], AbsPolicy]]]) -> CIMEnvSampler:
     return CIMEnvSampler(
         get_env=lambda: Env(**env_conf),
-        policy_creator=policy_creator,
-        agent2policy=agent2policy,
+        get_policy_creator=get_policy_creator,
+        get_agent2policy=get_agent2policy,
     )

@@ -14,6 +14,7 @@ import numpy as np
 import torch
 
 from maro.rl.policy import AbsPolicy, RLPolicy
+from maro.rl.utils import get_torch_device
 from maro.rl.utils.objects import FILE_SUFFIX
 from maro.simulator import Env
 
@@ -219,8 +220,8 @@ class AbsEnvSampler(object, metaclass=ABCMeta):
     def __init__(
         self,
         get_env: Callable[[], Env],
-        policy_creator: Dict[str, Callable[[str], AbsPolicy]],
-        agent2policy: Dict[Any, str],  # {agent_name: policy_name}
+        get_policy_creator: Callable[[Env], Dict[str, Callable[[str], AbsPolicy]]],
+        get_agent2policy: Callable[[Env], Dict[Any, str]],  # {agent_name: policy_name}
         trainable_policies: List[str] = None,
         agent_wrapper_cls: Type[AbsAgentWrapper] = SimpleAgentWrapper,
         reward_eval_delay: int = 0,
@@ -231,14 +232,15 @@ class AbsEnvSampler(object, metaclass=ABCMeta):
         self._env: Optional[Env] = None
         self._event = None  # Need this to remember the last event if an episode is divided into multiple segments
 
+        policy_creator = get_policy_creator(self._learn_env)
         self._policy_dict: Dict[str, AbsPolicy] = {
             policy_name: func(policy_name) for policy_name, func in policy_creator.items()
         }
         self._rl_policy_dict: Dict[str, RLPolicy] = {
             name: policy for name, policy in self._policy_dict.items() if isinstance(policy, RLPolicy)
         }
-        self._agent2policy = agent2policy
-        self._agent_wrapper = agent_wrapper_cls(self._policy_dict, agent2policy)
+        self._agent2policy = get_agent2policy(self._learn_env)
+        self._agent_wrapper = agent_wrapper_cls(self._policy_dict, self._agent2policy)
         if trainable_policies is None:
             self._trainable_policies = set(self._policy_dict.keys())
         else:
@@ -259,9 +261,14 @@ class AbsEnvSampler(object, metaclass=ABCMeta):
 
         self._info = {}
 
+    def assign_policy_to_device(self, get_device_mapping: Callable[[Env], Dict[str, str]]) -> None:
+        device_mapping = get_device_mapping(self.env)
+        for policy_name, device_name in device_mapping.items():
+            self._rl_policy_dict[policy_name].to_device(get_torch_device(device_name))
+
     @property
-    def rl_policy_dict(self) -> Dict[str, RLPolicy]:
-        return self._rl_policy_dict
+    def env(self) -> Env:
+        return self._learn_env
 
     def _get_global_and_agent_state(
         self, event: object, tick: int = None,

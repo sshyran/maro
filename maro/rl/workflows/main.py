@@ -1,5 +1,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
+
 import argparse
 import os
 import time
@@ -8,10 +9,13 @@ from typing import List
 from maro.rl.rollout import BatchEnvSampler, ExpElement
 from maro.rl.training import TrainingManager
 from maro.rl.training.utils import get_latest_ep
-from maro.rl.utils import get_torch_device
 from maro.rl.utils.common import float_or_none, get_env, int_or_none, list_or_none
-from maro.rl.workflows.scenario import Scenario
 from maro.utils import LoggerV2
+
+from .scenario import Scenario
+from .utils import (
+    get_trainable_agent2policy, get_trainable_policy_creator, single_mode_get_policy_creator,
+)
 
 
 def get_args() -> argparse.Namespace:
@@ -45,17 +49,16 @@ def training_workflow(scenario: Scenario) -> None:
     parallel_rollout = env_sampling_parallelism is not None or env_eval_parallelism is not None
     train_mode = get_env("TRAIN_MODE")
 
-    agent2policy = scenario.agent2policy
-    policy_creator = scenario.policy_creator
-    trainer_creator = scenario.trainer_creator
+    get_agent2policy = scenario.get_agent2policy
+    get_policy_creator = scenario.get_policy_creator
+    get_trainer_creator = scenario.get_trainer_creator
+
     is_single_thread = train_mode == "simple" and not parallel_rollout
     if is_single_thread:
-        # If running in single thread mode, create policy instances here and reuse then in rollout and training.
-        # In other words, `policy_creator` will return a policy instance that has been already created in advance
-        # instead of create a new policy instance.
-        policy_dict = {name: get_policy_func(name) for name, get_policy_func in policy_creator.items()}
-        policy_creator = {name: lambda name: policy_dict[name] for name in policy_dict}
+        # TODO: add doc
+        get_policy_creator = single_mode_get_policy_creator(get_policy_creator)
 
+    env_sampler_inst = scenario.env_sampler_creator(get_policy_creator)
     if parallel_rollout:
         env_sampler = BatchEnvSampler(
             sampling_parallelism=env_sampling_parallelism,
@@ -66,28 +69,27 @@ def training_workflow(scenario: Scenario) -> None:
             logger=logger,
         )
     else:
-        env_sampler = scenario.env_sampler_creator(policy_creator)
+        env_sampler = env_sampler_inst
         if train_mode != "simple":
-            for policy_name, device_name in scenario.device_mapping.items():
-                env_sampler.rl_policy_dict[policy_name].to_device(get_torch_device(device_name))
+            env_sampler.assign_policy_to_device(scenario.get_device_mapping)
 
     # evaluation schedule
     eval_schedule = list_or_none(get_env("EVAL_SCHEDULE", required=False))
     logger.info(f"Policy will be evaluated at the end of episodes {eval_schedule}")
     eval_point_index = 0
 
-    if scenario.trainable_policies is None:
-        trainable_policies = set(policy_creator.keys())
+    # Trainable policy configs
+    if scenario.get_trainable_policies is None:
+        trainable_policies = set(get_policy_creator(env_sampler_inst.env).keys())
     else:
-        trainable_policies = set(scenario.trainable_policies)
+        trainable_policies = set(scenario.get_trainable_policies(env_sampler_inst.env))
 
-    trainable_policy_creator = {name: func for name, func in policy_creator.items() if name in trainable_policies}
-    trainable_agent2policy = {id_: name for id_, name in agent2policy.items() if name in trainable_policies}
     training_manager = TrainingManager(
-        policy_creator=trainable_policy_creator,
-        trainer_creator=trainer_creator,
-        agent2policy=trainable_agent2policy,
-        device_mapping=scenario.device_mapping if train_mode == "simple" else {},
+        get_env=lambda: env_sampler_inst.env,
+        get_policy_creator=get_trainable_policy_creator(get_policy_creator, trainable_policies),
+        get_trainer_creator=get_trainer_creator,
+        get_agent2policy=get_trainable_agent2policy(get_agent2policy, trainable_policies),
+        get_device_mapping=scenario.get_device_mapping if train_mode == "simple" else lambda env: {},
         proxy_address=None if train_mode == "simple" else (
             get_env("TRAIN_PROXY_HOST"), int(get_env("TRAIN_PROXY_FRONTEND_PORT"))
         ),

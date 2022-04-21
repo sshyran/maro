@@ -2,15 +2,15 @@
 # Licensed under the MIT license.
 
 from .callbacks import post_collect, post_evaluate
-from .env_sampler import agent2policy, env_sampler_creator
-from .policy_trainer import device_mapping, policy_creator, trainer_creator
+from .env_sampler import env_sampler_creator, get_agent2policy
+from .policy_trainer import get_device_mapping, get_policy_creator, get_trainer_creator
 
 __all__ = [
-    "agent2policy",
-    "device_mapping",
+    "get_agent2policy",
+    "get_device_mapping",
     "env_sampler_creator",
-    "policy_creator",
+    "get_policy_creator",
     "post_collect",
     "post_evaluate",
-    "trainer_creator",
+    "get_trainer_creator",
 ]
