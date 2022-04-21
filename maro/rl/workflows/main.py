@@ -10,12 +10,11 @@ from maro.rl.rollout import BatchEnvSampler, ExpElement
 from maro.rl.training import TrainingManager
 from maro.rl.training.utils import get_latest_ep
 from maro.rl.utils.common import float_or_none, get_env, int_or_none, list_or_none
-from maro.utils import LoggerV2
-
-from .scenario import Scenario
-from .utils import (
+from maro.rl.workflows.scenario import Scenario
+from maro.rl.workflows.utils import (
     get_trainable_agent2policy, get_trainable_policy_creator, single_mode_get_policy_creator,
 )
+from maro.utils import LoggerV2
 
 
 def get_args() -> argparse.Namespace:
