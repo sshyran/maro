@@ -174,7 +174,9 @@ def evaluate_only_workflow(scenario: Scenario) -> None:
     env_eval_parallelism = int_or_none(get_env("ENV_EVAL_PARALLELISM", required=False))
     parallel_rollout = env_sampling_parallelism is not None or env_eval_parallelism is not None
 
-    policy_creator = scenario.policy_creator
+    get_policy_creator = scenario.get_policy_creator
+
+    env_sampler_inst = scenario.env_sampler_creator(get_policy_creator)
     if parallel_rollout:
         env_sampler = BatchEnvSampler(
             sampling_parallelism=env_sampling_parallelism,
@@ -185,7 +187,7 @@ def evaluate_only_workflow(scenario: Scenario) -> None:
             logger=logger,
         )
     else:
-        env_sampler = scenario.env_sampler_creator(policy_creator)
+        env_sampler = env_sampler_inst
 
     load_path = get_env("LOAD_PATH", required=False)
     load_episode = int_or_none(get_env("LOAD_EPISODE", required=False))
