@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 import torch
+from torch.distributions import Categorical
 
 from maro.rl.model import VNet
 from maro.rl.policy import DiscretePolicyGradient, RLPolicy
@@ -127,24 +128,27 @@ class DiscreteACBasedOps(AbsTrainOps):
             loss (torch.Tensor): The actor loss of the batch.
         """
         assert isinstance(self._policy, DiscretePolicyGradient)
-        self._policy.train()
 
         states = ndarray_to_tensor(batch.states, device=self._device)  # s
         actions = ndarray_to_tensor(batch.actions, device=self._device).long()  # a
         advantages = ndarray_to_tensor(batch.advantages, device=self._device)
 
+        self._policy.train()
         action_probs = self._policy.get_action_probs(states)
+        dist = Categorical(action_probs)
+        dist_entropy = dist.entropy()
         logps = torch.log(action_probs.gather(1, actions).squeeze())
         logps = torch.clamp(logps, min=self._min_logp, max=.0)
         if self._clip_ratio is not None:
             logps_old = ndarray_to_tensor(batch.old_logps, device=self._device)
             ratio = torch.exp(logps - logps_old)
             clipped_ratio = torch.clamp(ratio, 1 - self._clip_ratio, 1 + self._clip_ratio)
-            actor_loss = -(torch.min(ratio * advantages, clipped_ratio * advantages)).mean()
+            actor_loss = -(torch.min(ratio * advantages, clipped_ratio * advantages))
         else:
-            actor_loss = -(logps * advantages).mean()  # I * delta * log pi(a|s)
-
-        return actor_loss
+            actor_loss = -(logps * advantages)  # I * delta * log pi(a|s)
+        loss = (actor_loss - 0.2 * dist_entropy).mean()
+        # print('actor_loss: ', actor_loss.mean(), 'entropy loss: ', dist_entropy.mean())
+        return loss
 
     @remote
     def get_actor_grad(self, batch: TransitionBatch) -> Dict[str, torch.Tensor]:
@@ -227,6 +231,126 @@ class DiscreteACBasedOps(AbsTrainOps):
         self._device = get_torch_device(device)
         self._policy.to_device(self._device)
         self._v_critic_net.to(self._device)
+
+
+class DiscretePPOBasedOps(DiscreteACBasedOps):
+    """Base class of discrete actor-critic algorithm implementation. Reference: https://tinyurl.com/2ezte4cr
+    """
+    def __init__(
+        self,
+        name: str,
+        policy_creator: Callable[[str], DiscretePolicyGradient],
+        get_v_critic_net_func: Callable[[], VNet],
+        parallelism: int = 1,
+        *,
+        reward_discount: float = 0.9,
+        critic_loss_cls: Callable = None,
+        clip_ratio: float = None,
+        lam: float = 0.9,
+        min_logp: float = None,
+    ) -> None:
+        super(DiscretePPOBasedOps, self).__init__(
+            name=name,
+            policy_creator=policy_creator,
+            get_v_critic_net_func=get_v_critic_net_func,
+            parallelism=parallelism,
+            reward_discount=reward_discount,
+            critic_loss_cls=critic_loss_cls,
+            clip_ratio=clip_ratio,
+            lam=lam,
+            min_logp=min_logp,
+        )
+
+        assert isinstance(self._policy, DiscretePolicyGradient)
+        self._policy_old = self._policy_creator(self._name)
+        self._policy_old.set_state(self._policy.get_state())
+
+    def _preprocess_batch(self, batch: TransitionBatch) -> TransitionBatch:
+        """Preprocess the batch to get the returns & advantages.
+
+        Args:
+            batch (TransitionBatch): Batch.
+
+        Returns:
+            The updated batch.
+        """
+        assert isinstance(batch, TransitionBatch)
+        # Preprocess returns
+        batch.calc_returns(self._reward_discount)
+
+        # Preprocess advantages
+        states = ndarray_to_tensor(batch.states, self._device)  # s
+        state_values = self._v_critic_net.v_values(states).cpu().detach().numpy()
+        values = np.concatenate([state_values[1:], np.zeros(1).astype(np.float32)])
+        deltas = (batch.rewards+self._reward_discount*values - state_values)
+        # special care for tail state
+        deltas[-1] = 0.0
+        advantages = discount_cumsum(deltas, self._reward_discount * self._lam)
+        batch.advantages = advantages
+
+        if self._clip_ratio is not None:
+            self._policy_old.eval()
+            actions = ndarray_to_tensor(batch.actions, device=torch.device('cpu')).long()  # a
+            batch.old_logps = self._policy_old.get_state_action_logps(states.cpu(), actions).detach().cpu().numpy()
+            self._policy_old.train()
+
+        return batch
+
+    def _get_critic_loss(self, batch: TransitionBatch) -> torch.Tensor:
+        """Compute the critic loss of the batch.
+
+        Args:
+            batch (TransitionBatch): Batch.
+
+        Returns:
+            loss (torch.Tensor): The critic loss of the batch.
+        """
+        self._v_critic_net.train()
+        states = ndarray_to_tensor(batch.states, self._device)  # s
+        state_values = self._v_critic_net.v_values(states)
+        values = state_values.cpu().detach().numpy()
+        values = np.concatenate([values[1:], values[-1:]])
+        returns = batch.rewards + np.where(batch.terminals, 0.0, 1.0) * self._reward_discount * values
+        # special care for tail state
+        returns[-1] = state_values[-1]
+        returns = ndarray_to_tensor(returns, self._device)
+        return self._critic_loss_func(state_values.float(), returns.float())
+
+    def _get_actor_loss(self, batch: TransitionBatch) -> torch.Tensor:
+        """Compute the actor loss of the batch.
+
+        Args:
+            batch (TransitionBatch): Batch.
+
+        Returns:
+            loss (torch.Tensor): The actor loss of the batch.
+        """
+        assert isinstance(self._policy, DiscretePolicyGradient)
+
+        states = ndarray_to_tensor(batch.states, self._device)  # s
+        actions = ndarray_to_tensor(batch.actions, self._device).long()  # a
+        advantages = ndarray_to_tensor(batch.advantages, self._device) # adv
+
+        if self._clip_ratio is not None:
+            logps_old = ndarray_to_tensor(batch.old_logps, self._device)
+        else:
+            logps_old = None
+
+        self._policy.train()
+        action_probs = self._policy.get_action_probs(states)
+        dist = Categorical(action_probs)
+        dist_entropy = dist.entropy()
+        logps = torch.log(action_probs.gather(1, actions).squeeze())
+        logps = torch.clamp(logps, min=self._min_logp, max=.0)
+        if self._clip_ratio is not None:
+            ratio = torch.exp(logps - logps_old)
+            clipped_ratio = torch.clamp(ratio, 1 - self._clip_ratio, 1 + self._clip_ratio)
+            actor_loss = -(torch.min(ratio * advantages, clipped_ratio * advantages)).float()
+        else:
+            actor_loss = -(logps * advantages).float() # I * delta * log pi(a|s)
+        loss = (actor_loss - 0.2 * dist_entropy).mean()
+        # print('actor_loss: ', actor_loss.mean(), 'entropy loss: ', dist_entropy.mean())
+        return loss
 
 
 class DiscreteACBasedTrainer(SingleAgentTrainer):
