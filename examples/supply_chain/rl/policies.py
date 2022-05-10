@@ -2,7 +2,9 @@
 # Licensed under the MIT license.
 
 from functools import partial
-from typing import Any, Dict, Optional
+from typing import Any, Dict
+
+import torch
 
 from maro.simulator import Env
 from maro.simulator.scenarios.supply_chain import ConsumerUnit, ManufactureUnit
@@ -10,11 +12,17 @@ from maro.simulator.scenarios.supply_chain.business_engine import SupplyChainBus
 from maro.simulator.scenarios.supply_chain.facilities import FacilityInfo
 from maro.simulator.scenarios.supply_chain.objects import SupplyChainEntity
 
-from .rl_agent_state import STATE_DIM
-from .algorithms.ppo import get_policy, get_ppo
-from .algorithms.rule_based import ConsumerMinMaxPolicy
-from .config import NUM_CONSUMER_ACTIONS, env_conf
+from .algorithms.ppo import get_policy as get_ppo_policy
+from .algorithms.ppo import get_ppo
+from .algorithms.dqn import get_policy as get_dqn_policy
+from .algorithms.dqn import get_dqn
 
+from .algorithms.rule_based import ManufacturerSSPolicy, ConsumerMinMaxPolicy
+from .config import env_conf, ALGO, NUM_CONSUMER_ACTIONS, SHARED_MODEL
+from .rl_agent_state import STATE_DIM
+
+
+IS_BASELINE = (ALGO == "EOQ")
 
 # Create an env to get entity list and env summary
 env = Env(**env_conf)
@@ -29,32 +37,27 @@ entity_dict: Dict[Any, SupplyChainEntity] = {
     for entity in helper_business_engine.get_entity_list()
 }
 
-
-def entity2policy(entity: SupplyChainEntity) -> Optional[str]:
+# Define the rule of policy mapping
+def entity2policy(entity: SupplyChainEntity) -> str:
     if issubclass(entity.class_type, ManufactureUnit):
-        return None
+        return "manufacturer_policy"
 
     elif issubclass(entity.class_type, ConsumerUnit):
         facility_name = facility_info_dict[entity.facility_id].name
-        if "Plant" in facility_name:
-            # Return the policy name if needed
-            pass
-        elif "Warehouse" in facility_name:
-            # Return the policy name if needed
-            pass
-        elif "Store" in facility_name:
-            # Return the policy name if needed
-            pass
-        return "ppo.policy"
-        # return "consumer_policy"
+        if not IS_BASELINE and any([
+            facility_name.startswith("CA_"),
+            facility_name.startswith("TX_"),
+            facility_name.startswith("WI_"),
+        ]):
+            if SHARED_MODEL:
+                return "consumer.policy"
+            else:
+                return f"consumer_{facility_name[:2]}.policy"
+
+        else:
+            return "consumer_baseline_policy"
 
     return None
-
-
-policy_creator = {
-    "ppo.policy": partial(get_policy, STATE_DIM, NUM_CONSUMER_ACTIONS),
-    "consumer_policy": lambda name: ConsumerMinMaxPolicy(name),
-}
 
 agent2policy = {
     id_: entity2policy(entity)
@@ -62,8 +65,50 @@ agent2policy = {
     if entity2policy(entity)
 }
 
-trainable_policies = ["ppo.policy"]
-
-trainer_creator = {
-    "ppo": partial(get_ppo, STATE_DIM),
+get_policy = (get_dqn_policy if ALGO == "DQN" else get_ppo_policy)
+policy_creator = {
+    "consumer_baseline_policy": lambda name: ConsumerMinMaxPolicy(name),
+    "manufacturer_policy": lambda name: ManufacturerSSPolicy(name),
+    "consumer.policy": partial(get_policy, STATE_DIM, NUM_CONSUMER_ACTIONS),
+    "consumer_CA.policy": partial(get_policy, STATE_DIM, NUM_CONSUMER_ACTIONS),
+    "consumer_TX.policy": partial(get_policy, STATE_DIM, NUM_CONSUMER_ACTIONS),
+    "consumer_WI.policy": partial(get_policy, STATE_DIM, NUM_CONSUMER_ACTIONS),
 }
+
+# Define basic device mapping
+cuda_mapping = {
+    "CA": "cpu",
+    "TX": "cpu",
+    "WI": "cpu",
+    "shared": "cpu",
+}
+if torch.cuda.is_available():
+    gpu_cnts = torch.cuda.device_count()
+    cuda_mapping = {
+        "CA": f"cuda:{0 % gpu_cnts}",
+        "TX": f"cuda:{1 % gpu_cnts}",
+        "WI": f"cuda:{2 % gpu_cnts}",
+        "shared": "cuda:0",
+    }
+
+get_trainer = (get_dqn if ALGO=="DQN" else partial(get_ppo, STATE_DIM))
+if SHARED_MODEL:
+    trainable_policies = ["consumer.policy"]
+    trainer_creator = {"consumer": get_trainer}
+    device_mapping = {"consumer.policy": cuda_mapping["shared"]}
+else:
+    trainable_policies = [
+        "consumer_CA.policy",
+        "consumer_TX.policy",
+        "consumer_WI.policy",
+    ]
+    trainer_creator = {
+        "consumer_CA": get_trainer,
+        "consumer_TX": get_trainer,
+        "consumer_WI": get_trainer,
+    }
+    device_mapping = {
+        "consumer_CA.policy": cuda_mapping["CA"],
+        "consumer_TX.policy": cuda_mapping["TX"],
+        "consumer_WI.policy": cuda_mapping["WI"],
+    }
