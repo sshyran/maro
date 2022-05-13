@@ -135,7 +135,7 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual([10, 10, 0, 0], list(consumer_unit.pending_order_daily))
 
     def test_seller_state_only(self) -> None:
-        """Test "sale_mean" and "_sale_hist"""
+        """Test "sale_mean" and "_sale_hist """
 
         env = build_env("case_05", 600)
         be = env.business_engine
