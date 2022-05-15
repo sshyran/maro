@@ -24,7 +24,7 @@ IDX_CONSUMER_ORDER_BASE_COST, IDX_CONSUMER_LATEST_CONSUMPTIONS = 0, 1
 vlt_buffer_days = 1.0
 num_products_to_sample = 500
 
-ALGO="PPO"
+ALGO="EOQ"
 assert ALGO in ["DQN", "EOQ", "PPO"], "wrong ALGO"
 
 TEAM_REWARD = False
@@ -40,7 +40,9 @@ TOPOLOGY = "super_vendor"
 TRAIN_STEPS = 180
 EVAL_STEPS = 60
 
+PLOT_RENDER = False
 DUMP_PRODUCT_METRICS = True
+LOG_CONSUMER_ACTIONS = True
 
 
 env_conf = {
@@ -63,9 +65,16 @@ workflow_settings: dict = {
     "reward_normalization": 1.0,
     "default_vehicle_type": None,
     "vehicle_selection_method": VehicleSelection.CHEAPEST_TOTAL_COST,
+    "log_path": "examples/supply_chain/logs/",
+    "plot_render": PLOT_RENDER,
+    "dump_product_metrics": DUMP_PRODUCT_METRICS,
+    "log_consumer_actions": LOG_CONSUMER_ACTIONS,
 }
 
-EXP_NAME = f"{TOPOLOGY}_{test_env_conf['durations']}_{ALGO}_{workflow_settings['vehicle_selection_method']}"
+EXP_NAME = (
+    f"{TOPOLOGY}_{test_env_conf['durations']}_{ALGO}_"
+    f"{workflow_settings['vehicle_selection_method']}"
+)
 
 # EXP_NAME = f"{ALGO}_SCI_{num_products_to_sample}SKUs_DIST_{vlt_buffer_days}"
 # if TEAM_REWARD:
@@ -77,4 +86,4 @@ EXP_NAME = f"{TOPOLOGY}_{test_env_conf['durations']}_{ALGO}_{workflow_settings['
 # 50: 9710599.291015625
 # 100: 36535436.5625
 
-render_log_path = f"examples/supply_chain/results/{EXP_NAME}/"
+workflow_settings["log_path"] = f"examples/supply_chain/logs/{EXP_NAME}/"
